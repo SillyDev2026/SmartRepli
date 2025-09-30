@@ -1,3 +1,6 @@
+a simple thing to use and comes with a plugin on creating the Data to be usable with saving Modules to store for newer games 
+like for example
+ClickerSim backup or smth and can work with live edits based on the game u have but must work with the same DataStore name
 <img width="295" height="191" alt="image" src="https://github.com/user-attachments/assets/9c9b61db-2b83-49a9-988e-0dccf8432a32" />
 
 https://create.roblox.com/store/asset/91405093716306/SmartReplicate-Editor?assetType=Plugin&externalSource=www
