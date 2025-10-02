@@ -3,7 +3,7 @@ like for example
 ClickerSim backup or smth and can work with live edits based on the game u have but must work with the same DataStore name
 <img width="295" height="191" alt="image" src="https://github.com/user-attachments/assets/9c9b61db-2b83-49a9-988e-0dccf8432a32" />
 
-https://create.roblox.com/store/asset/91405093716306/SmartReplicate-Editor?assetType=Plugin&externalSource=www
+https://create.roblox.com/store/asset/107314367553673/SmartReplica-Editor
 <img width="461" height="777" alt="image" src="https://github.com/user-attachments/assets/915e147f-deb0-4229-8073-eaa60413dfc5" />
 <img width="444" height="380" alt="image" src="https://github.com/user-attachments/assets/371e3971-f1e4-4f2a-af3c-cdcd7af6c0ab" />
 <img width="439" height="93" alt="image" src="https://github.com/user-attachments/assets/371fd522-6583-4eb2-b85e-e5c010c345fc" />
