@@ -64,7 +64,6 @@ function ClientFolder:FireChanged(path, newValue, oldValue)
 end
 
 function ClientFolder:OnChanged(path, callback)
-	local folderName, itemName = path:match('([^.]+)%.([^.]+)')
 	self.ChangeListeners[path] = self.ChangeListeners[path] or {}
 	table.insert(self.ChangeListeners[path], callback)
 end
