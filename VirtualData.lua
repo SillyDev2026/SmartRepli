@@ -40,7 +40,9 @@ export type VirtualData = {
 	SetSyncMode: (self: VirtualData, folderName: string, mode: string) -> (),
 	TogglePublic: (self: VirtualData, folderName: string) -> (),
 	Destroy: (self: VirtualData) -> (),
-	GetData: (self: VirtualData, path: string) -> any
+	GetData: (self: VirtualData, path: string) -> any,
+	CreateFolder: (self: VirtualData, name: string, parent: any) -> Folder,
+	CreateValue: (self: VirtualData, instanceType: 'NumberValue'|'StringValue'|'BoolValue'|'IntValue', name: string, val: any, parent: any) -> ()
 }
 
 function PlayerFolder.new(player, schema, dataStore): VirtualData
@@ -79,21 +81,21 @@ function PlayerFolder:Define(path, dataType, defaultValue, syncMode)
 	folder[itemName.."__type"] = dataType
 end
 
-function PlayerFolder:AddMiddleware(path: string, func: () -> ())
+function PlayerFolder:AddMiddleware(path, func)
 	self.Middleware[path] = func
 end
 
-function PlayerFolder:FireCreated(folderName: string)
+function PlayerFolder:FireCreated(folderName)
 	for _,cb in ipairs(self.CreatedListeners) do
 		cb(folderName)
 	end
 end
 
-function PlayerFolder:OnCreated(callback: () ->())
+function PlayerFolder:OnCreated(callback)
 	table.insert(self.CreatedListeners, callback)
 end
 
-function PlayerFolder:FireChanged(path: string, newValue: any, oldValue: any)
+function PlayerFolder:FireChanged(path, newValue, oldValue)
 	if self.ChangeListeners[path] then
 		for _, cb in ipairs(self.ChangeListeners[path]) do
 			cb(newValue, oldValue)
@@ -101,12 +103,12 @@ function PlayerFolder:FireChanged(path: string, newValue: any, oldValue: any)
 	end
 end
 
-function PlayerFolder:OnChanged(path: string, callback: (...any) -> ())
+function PlayerFolder:OnChanged(path, callback)
 	self.ChangeListeners[path] = self.ChangeListeners[path] or {}
 	table.insert(self.ChangeListeners[path], callback)
 end
 
-function PlayerFolder:Update(folderName: string, itemName: string, value: any)
+function PlayerFolder:Update(folderName, itemName, value)
 	self:EnsureFolder(folderName)
 	local folder = self.Data[folderName]
 	if itemName == "__sync" then return end
@@ -135,7 +137,7 @@ function PlayerFolder:Update(folderName: string, itemName: string, value: any)
 	end
 end
 
-function PlayerFolder:SetSyncMode(folderName: string, mode: string)
+function PlayerFolder:SetSyncMode(folderName, mode)
 	local folder = self.Data[folderName]
 	if not folder then return end
 	folder.__sync = mode
@@ -154,7 +156,7 @@ function PlayerFolder:SetSyncMode(folderName: string, mode: string)
 	end
 end
 
-function PlayerFolder:TogglePublic(folderName: string)
+function PlayerFolder:TogglePublic(folderName)
 	local folder = self.Data[folderName]
 	if not folder then return end
 	local newMode = (folder.__sync == "Public") and "Private" or "Public"
@@ -166,7 +168,7 @@ function PlayerFolder:Destroy()
 	FolderSyncEvent:FireAllClients("RemovePlayer", self.Player.UserId)
 end
 
-function PlayerFolder.get(player: Player): VirtualData
+function PlayerFolder.get(player): VirtualData
 	local folder = ActiveFolders[player.UserId]
 	while not folder do
 		task.wait()
@@ -174,7 +176,7 @@ function PlayerFolder.get(player: Player): VirtualData
 	return folder
 end
 
-function PlayerFolder.remove(player: Player)
+function PlayerFolder.remove(player)
 	local folder = ActiveFolders[player.UserId]
 	if folder then folder:Destroy() end
 end
@@ -186,10 +188,10 @@ FolderSyncEvent.OnServerEvent:Connect(function(player, action, ...)
 		local folderName, itemName, value = ...
 		if folder then folder:Update(folderName, itemName, value) end
 	elseif action == 'RequestModule' then
-		local moduleName, moduleAction, index = ...
+		local moduleName, moduleAction, args = ...
 		local module = StatsModules[moduleName]
 		if module and module[moduleAction] then
-			module[moduleAction](player, folder, index)
+			module[moduleAction](player, folder, table.unpack({args}))
 		end
 	end
 end)
@@ -198,7 +200,7 @@ Players.PlayerRemoving:Connect(function(player)
 	PlayerFolder.remove(player)
 end)
 
-function PlayerFolder:GetData(path: string)
+function PlayerFolder:GetData(path: string): any
 	local folderName, itemName = path:match('([^.]+)%.([^.]+)')
 	if not folderName or not itemName then
 		warn(`Invalid path: {path}`)
@@ -206,6 +208,21 @@ function PlayerFolder:GetData(path: string)
 	end
 	local folder = self.Data[folderName]
 	return folder[itemName]
+end
+
+function PlayerFolder:CreateFolder(name: string, parent: any): Folder
+	local folder = Instance.new('Folder')
+	folder.Name = name
+	folder.Parent = parent
+	return folder
+end
+
+function PlayerFolder:CreateValue(instType: 'NumberValue'|'StringValue'|'BoolValue'|'IntValue', name: string, val: any, parent: any)
+	local value = Instance.new(instType)
+	value.Name = name
+	value.Value = val
+	value.Parent = parent
+	return parent
 end
 
 return PlayerFolder
