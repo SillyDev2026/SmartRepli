@@ -18,6 +18,37 @@ if not FolderSyncEvent then
 end
 
 local ActiveFolders = {}
+local lastRemoteRequest = {} -- rate-limit two request types per user
+local MIN_REQUEST_INTERVAL = 0.1
+
+local function requestAllowed(player: Player, channel: string): boolean
+    if player.Parent ~= Players then return false end
+    local now = os.clock()
+    local bucket = lastRemoteRequest[player.UserId]
+    if not bucket then
+        bucket = {Update = -math.huge, Module = -math.huge}
+        lastRemoteRequest[player.UserId] = bucket
+    end
+    if now - bucket[channel] < MIN_REQUEST_INTERVAL then return false end
+    bucket[channel] = now
+    return true
+end
+
+local function isValidPath(path: any): boolean
+    return type(path) == "string" and #path <= 96
+        and path:match("^[%w_]+%.[%w_]+$") ~= nil
+end
+
+local function publicSnapshot(source: {[string]: any}): {[string]: any}
+    local snapshot = {}
+    for name, folder in pairs(source) do
+        if type(folder) == "table" and folder.__sync == "Public" then
+            snapshot[name] = folder
+        end
+    end
+    return snapshot
+end
+
 
 local function DeepCopy(tbl)
 	local copy = {}
@@ -54,6 +85,7 @@ function PlayerFolder.new(player, schema, dataStore): VirtualData
 	self.ChangeListeners = {}
 	self.CreatedListeners = {}
 	self.Middleware = {}
+    self.ClientWritable = {} -- Default deny
 	self.Store = dataStore
 	ActiveFolders[player.UserId] = self
 
@@ -61,7 +93,8 @@ function PlayerFolder.new(player, schema, dataStore): VirtualData
 		self:FireCreated(folderName)
 	end
 
-	FolderSyncEvent:FireAllClients("InitPlayer", player.UserId, self.Data)
+    FolderSyncEvent:FireAllClients("InitPlayer", player.UserId, publicSnapshot(self.Data))
+    FolderSyncEvent:FireClient(player, "InitPlayer", player.UserId, self.Data)
 	return self
 end
 
@@ -79,6 +112,18 @@ function PlayerFolder:Define(path, dataType, defaultValue, syncMode)
 	folder[itemName] = defaultValue
 	folder.__sync = syncMode or "Private"
 	folder[itemName.."__type"] = dataType
+end
+
+function PlayerFolder:AllowClientUpdate(path: string, validator: ((any, any) -> boolean)?)
+    assert(isValidPath(path), "Client update path must be Folder.Key")
+    assert(validator == nil or type(validator) == "function", "Validator must be callable")
+    self.ClientWritable[path] = validator or true
+    return self
+end
+
+function PlayerFolder:DisallowClientUpdate(path: string)
+    self.ClientWritable[path] = nil
+    return self
 end
 
 function PlayerFolder:AddMiddleware(path, func)
@@ -111,7 +156,7 @@ end
 function PlayerFolder:Update(folderName, itemName, value)
 	self:EnsureFolder(folderName)
 	local folder = self.Data[folderName]
-	if itemName == "__sync" then return end
+    if itemName == "__sync" or itemName:match("__type$") then return end
 	local expectedType = folder[itemName.."__type"]
 	if expectedType and type(value) ~= expectedType then
 		warn("Type mismatch on update:", folderName, itemName)
@@ -140,16 +185,18 @@ end
 function PlayerFolder:SetSyncMode(folderName, mode)
 	local folder = self.Data[folderName]
 	if not folder then return end
-	folder.__sync = mode
-	for itemName,value in pairs(folder) do
-		if itemName ~= "__sync" and not itemName:match("__type$") then
-			if mode == "Public" then
-				FolderSyncEvent:FireAllClients("Update", self.Player.UserId, folderName, itemName, value)
-			else
-				FolderSyncEvent:FireClient(self.Player, "Update", self.Player.UserId, folderName, itemName, value)
-			end
-		end
-	end
+    assert(mode == "Public" or mode == "Private", "Expected Public or Private")
+    folder.__sync = mode
+    for itemName, value in pairs(folder) do
+        if itemName ~= "__sync" and not itemName:match("__type$") then
+            if mode == "Public" then
+                FolderSyncEvent:FireAllClients("Update", self.Player.UserId, folderName, itemName, value)
+            else
+                FolderSyncEvent:FireAllClients("Update", self.Player.UserId, folderName, itemName, nil)
+                FolderSyncEvent:FireClient(self.Player, "Update", self.Player.UserId, folderName, itemName, value)
+            end
+        end
+    end
 	if self.Store then
 		local key = self.Store.SetKey(self.Player)
 		self.Store.Session[key] = self.Data
@@ -182,21 +229,47 @@ function PlayerFolder.remove(player)
 end
 
 FolderSyncEvent.OnServerEvent:Connect(function(player, action, ...)
-	local folder = PlayerFolder.get(player)
-	if not folder then return end
-	if action == "RequestUpdate" then
-		local folderName, itemName, value = ...
-		if folder then folder:Update(folderName, itemName, value) end
-	elseif action == 'RequestModule' then
-		local moduleName, moduleAction, args = ...
-		local module = StatsModules[moduleName]
-		if module and module[moduleAction] then
-			module[moduleAction](player, folder, table.unpack({args}))
-		end
-	end
+    if player.Parent ~= Players then return end
+    local folder = ActiveFolders[player.UserId]
+    if not folder then return end
+    if action == "RequestUpdate" then
+        if not requestAllowed(player, "Update") then return end
+        local folderName, itemName, value = ...
+        if type(folderName) ~= "string" or type(itemName) ~= "string" then return end
+        local path = folderName .. "." .. itemName
+        if not isValidPath(path) or value == nil then return end
+        local writable = folder.ClientWritable[path]
+        if writable == nil then return end
+        local data = folder.Data[folderName]
+        if type(data) ~= "table" or data[itemName] == nil then return end
+        if itemName == "__sync" or itemName:match("__type$") then return end
+        if typeof(data[itemName]) ~= typeof(value) then return end
+        if type(value) ~= "number" and type(value) ~= "boolean" and type(value) ~= "string" then return end
+        if type(value) == "number" and (value ~= value or math.abs(value) == math.huge) then return end
+        if type(value) == "string" and #value > 512 then return end
+        if type(writable) == "function" then
+            local ok, accepted = pcall(writable, value, data[itemName])
+            if not ok or accepted ~= true then return end
+        end
+        folder:Update(folderName, itemName, value)
+    elseif action == "RequestModule" then
+        if not requestAllowed(player, "Module") then return end
+        local args = table.pack(...)
+        local moduleName = args[1]
+        local moduleAction = args[2]
+        if type(moduleName) ~= "string" or type(moduleAction) ~= "string" then return end
+        local module = StatsModules[moduleName]
+        if type(module) ~= "table" or type(module.ClientActions) ~= "table" then return end
+        if module.ClientActions[moduleAction] ~= true then return end
+        local callback = module[moduleAction]
+        if type(callback) ~= "function" then return end
+        local ok, err = pcall(callback, player, folder, table.unpack(args, 3, args.n))
+        if not ok then warn("[SmartRepli] Client action failed:", err) end
+    end
 end)
 
 Players.PlayerRemoving:Connect(function(player)
+    lastRemoteRequest[player.UserId] = nil
 	PlayerFolder.remove(player)
 end)
 
@@ -207,6 +280,7 @@ function PlayerFolder:GetData(path: string): any
 		return nil
 	end
 	local folder = self.Data[folderName]
+    if type(folder) ~= "table" then return nil end
 	return folder[itemName]
 end
 
