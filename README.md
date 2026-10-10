@@ -1,30 +1,75 @@
-a simple thing to use and comes with a plugin on creating the Data to be usable with saving Modules to store for newer games 
-like for example
-ClickerSim backup or smth and can work with live edits based on the game u have but must work with the same DataStore name
-<img width="295" height="191" alt="image" src="https://github.com/user-attachments/assets/9c9b61db-2b83-49a9-988e-0dccf8432a32" />
+# SmartRepli — Roblox player-data replication
 
-https://create.roblox.com/store/asset/107314367553673/SmartReplica-Editor
-<img width="461" height="777" alt="image" src="https://github.com/user-attachments/assets/915e147f-deb0-4229-8073-eaa60413dfc5" />
-<img width="444" height="380" alt="image" src="https://github.com/user-attachments/assets/371e3971-f1e4-4f2a-af3c-cdcd7af6c0ab" />
-<img width="439" height="93" alt="image" src="https://github.com/user-attachments/assets/371fd522-6583-4eb2-b85e-e5c010c345fc" />
-https://youtu.be/bF9iR7r-KmY
+SmartRepli is a Roblox Luau client/server replication prototype that synchronizes named player-data folders through a `RemoteEvent`, supports server-side middleware and changed-value listeners, and optionally exposes explicitly approved gameplay actions. This is the older SmartRepli repository, distinct from **SmartReplicate**.
 
-SmartReplicate is a Roblox Lua module designed to replicate player data from the client to the server safely. It ensures that all updates are validated, synchronized, and optionally visible to other clients based on a public/private sync mode. The module is built around PlayerFolder objects, which store player data in organized folders and provide change notifications, middleware support, and type enforcement. How to Use SmartReplicate Setup Place the SmartReplicate module in ServerScriptService along with any additional modules it requires. These modules can define custom behaviors or handle special data operations.
+## Installation
 
-Creating Player Folders When a player joins, create a PlayerFolder for them. The folder will store all their data in a structured format. You can provide a default schema for each folder, and SmartReplicate will automatically create deep copies of this schema for each player.
+Place `VirtualData.lua` into a server-accessible `ModuleScript` named `VirtualData`. It expects sibling `Modules` folder containing your gameplay modules and DataStore components. Place `ClientHandler.lua` in a client-accessible `ModuleScript` named `ClientHandler` under ReplicatedStorage. The server creates `ReplicatedStorage.FolderSyncEvent` if needed.
 
-Defining Data Items Use Define to create individual items inside a folder. Each item has a type, default value, and optional sync mode. Sync mode determines whether changes are automatically replicated to all clients or only to the client that owns the data.
+Server-side example:
 
-Listening for Changes SmartReplicate allows you to attach listeners to individual data items or entire folders. Whenever an item changes, all registered listeners are automatically triggered. You can also listen for newly created folders.
+```luau
+local VirtualData = require(game.ServerScriptService.VirtualData)
+local folder = VirtualData.new(player, {
+    Settings = {MusicEnabled = true, __sync = "Private"},
+    Stats = {Wins = 0, __sync = "Public"},
+})
 
-Middleware Middleware functions let you intercept and modify values before they are saved. This is useful for enforcing rules, validating data, or applying transformations.
+folder:AllowClientUpdate("Settings.MusicEnabled", function(newValue)
+    return type(newValue) == "boolean"
+end)
 
-Updating Data Use Update to change the value of an item. SmartReplicate automatically checks the data type, applies middleware, triggers change events, and replicates the update to clients according to the folder’s sync mode.
+folder:Update("Stats", "Wins", 1)
+```
 
-Public/Private Sync Each folder can be public or private. Public folders replicate changes to all clients, whereas private folders replicate changes only to the owning player. You can change sync mode dynamically at any time.
+Client-side example:
 
-Cleaning Up When a player leaves, SmartReplicate automatically removes their folder and notifies clients. You can also manually remove folders if needed.
+```luau
+local ClientHandler = require(game.ReplicatedStorage.ClientHandler)
+local own = ClientHandler.get(game.Players.LocalPlayer.UserId)
+print(own:GetData("Stats.Wins"))
+own:RequestUpdate("Settings", "MusicEnabled", false)
+```
 
-Integration with Modules Additional modules can be stored inside the Modules folder and invoked through SmartReplicate. These modules can define extra behaviors, such as custom data processing, server-side logic, or special events.
+### Server-authoritative security
 
-SmartReplicate is designed for flexibility, security, and ease of use. It abstracts the complexity of client-server replication, making it safe and reliable for multiplayer Roblox games.
+Prior to this fix, a client could directly update any field through `RequestUpdate` or call any exported method on server modules through `RequestModule`. The server **now denies both by default**. The server may allow safe primitive field updates using `:AllowClientUpdate("Folder.Key", validator?)`.
+
+Modules must explicitly expose remote actions:
+
+```luau
+local Module = {}
+Module.ClientActions = {UseAbility = true}
+function Module.UseAbility(player, folder, abilityName)
+    -- Validate server-authoritative cooldowns, ownership, and costs.
+end
+return Module
+```
+
+Both incoming action types are rate-limited to a minimum interval of 0.1 seconds per player. Do not authorize client-written currencies or ownership flags. Trust the server to calculate and persist rewards.
+
+### Public and private replication
+
+Only folders marked `__sync = "Public"` are sent to other players. Full data is sent to its owner via `RemoteEvent:FireClient`. The client merges the public and private initial packets instead of dropping whichever arrives second. Changing a public folder to private also sends deletion updates to revoke its old values elsewhere. Previously replicated public information cannot be made secret retroactively.
+
+### Public API
+
+| Module | Operations |
+| --- | --- |
+| `VirtualData` | `new`, `EnsureFolder`, `Define`, `Update`, `GetData`, `SetSyncMode`, `TogglePublic`, `AllowClientUpdate`, `DisallowClientUpdate`, `OnChanged`, `Destroy` |
+| `ClientHandler` | `get`, `RequestUpdate`, `RequestModule`, `GetData`, `OnChanged` |
+
+## Test and migration requirements
+
+The security default intentionally changes behavior. Existing unapproved client-side write calls and module actions will stop working until server approval is added. Test with **two players** in Roblox Studio and inspect both replicated folder stores: no private values should appear to the other player; unauthorized updates should not change server data; validators should reject bad inputs; authorized actions should still work. Check with Script Analysis and the Studio Script Profiler before publishing.
+
+This repository does not contain a full DataStore session-lock regression suite. It is not a substitute for a production-secure data persistence system. The code is not yet fully analyzed under Luau `--!strict`; that remains a separate requirement.
+
+Official language references: https://luau.org/typecheck/ and https://luau.org/performance/.
+
+## Original project references
+
+- [SmartReplica Editor Roblox Studio asset](https://create.roblox.com/store/asset/107314367553673/SmartReplica-Editor)
+- [Video tutorial](https://youtu.be/bF9iR7r-KmY)
+
+![SmartReplica Editor preview](https://github.com/user-attachments/assets/9c9b61db-2b83-49a9-988e-0dccf8432a32)
