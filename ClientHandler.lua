@@ -24,7 +24,15 @@ local ClientFolder = {}
 ClientFolder.__index = ClientFolder
 
 function ClientFolder.new(userId, schema)
-	if ActiveFolders[userId] then return ActiveFolders[userId] end
+	if ActiveFolders[userId] then
+        if type(schema) == "table" then
+            local existing = ActiveFolders[userId]
+            for name, value in pairs(schema) do
+                existing.Data[name] = DeepCopy(value)
+            end
+        end
+        return ActiveFolders[userId]
+    end
 	local self = setmetatable({}, ClientFolder)
 	self.UserId = userId
 	self.Data = schema and DeepCopy(schema) or {}
@@ -92,7 +100,8 @@ function ClientFolder.get(userId): ClientData
 end
 
 function ClientFolder.remove(userId)
-	ActiveFolders[userId] = nil
+    local normalized = tonumber(userId)
+    if normalized then ActiveFolders[normalized] = nil end
 end
 
 FolderSyncEvent.OnClientEvent:Connect(function(action, userId, ...)
@@ -101,10 +110,10 @@ FolderSyncEvent.OnClientEvent:Connect(function(action, userId, ...)
 		ClientFolder.new(userId, data)
 	elseif action == "Update" then
 		local folderName, itemName, value = ...
-		local folder = ClientFolder.get(userId)
-		if folder then
-			folder:ApplyUpdate(folderName, itemName, value)
-		end
+        -- The update may arrive before InitPlayer; do not block the
+        -- OnClientEvent handler waiting for a folder that isn't created yet.
+        local folder = ActiveFolders[userId] or ClientFolder.new(userId)
+        folder:ApplyUpdate(folderName, itemName, value)
 	elseif action == "RemovePlayer" then
 		ClientFolder.remove(userId)
 	end
@@ -120,8 +129,9 @@ function ClientFolder:GetData(path: string): any
 		warn(`Invalid path: {path}`)
 		return nil
 	end
-	local folder = self.Data[folderName]
-	return folder[itemName]
+    local folder = self.Data[folderName]
+    if type(folder) ~= "table" then return nil end
+    return folder[itemName]
 end
 
 return ClientFolder
